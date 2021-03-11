@@ -16,6 +16,7 @@ use stp258_traits::{
 	arithmetic::{Signed, SimpleArithmetic},
 	BalanceStatus, Stp258Asset, Stp258AssetExtended, Stp258AssetLockable, Stp258AssetReservable,
 	LockIdentifier, Stp258Currency, Stp258CurrencyExtended, Stp258CurrencyReservable, Stp258CurrencyLockable,
+	Stp258StableCurrency, Stp258StableCurrencyExtended, Stp258StableCurrencyLockable, Stp258StableCurrencyReservable,
 };
 use orml_utilities::with_transaction_result;
 use sp_runtime::{
@@ -47,17 +48,19 @@ pub mod module {
 	}
 
 	pub(crate) type BalanceOf<T> =
-		<<T as Config>::Stp258Currency as Stp258Currency<<T as frame_system::Config>::AccountId>>::Balance;
+		<<T as Config>::Stp258Currency as Stp258StableCurrency<<T as frame_system::Config>::AccountId>>::Balance;
 	pub(crate) type CurrencyIdOf<T> =
-		<<T as Config>::Stp258Currency as Stp258Currency<<T as frame_system::Config>::AccountId>>::CurrencyId;
+		<<T as Config>::Stp258Currency as Stp258StableCurrency<<T as frame_system::Config>::AccountId>>::CurrencyId;
 	pub(crate) type AmountOf<T> =
-		<<T as Config>::Stp258Currency as Stp258CurrencyExtended<<T as frame_system::Config>::AccountId>>::Amount;
+		<<T as Config>::Stp258Currency as Stp258StableCurrencyExtended<<T as frame_system::Config>::AccountId>>::Amount;
+	pub(crate) type BaseUnitOf<T> =
+		<<T as Config>::Stp258StableCurrency as Stp258StableCurrency<<T as frame_system::Config>::AccountId>>::BaseUnit;
 
 	#[pallet::config]
 	pub trait Config: frame_system::Config {
 		type Event: From<Event<Self>> + IsType<<Self as frame_system::Config>::Event>;
 
-		type Stp258Currency: MergeAccount<Self::AccountId>
+		type Stp258StableCurrency: MergeAccount<Self::AccountId>
 			+ Stp258CurrencyExtended<Self::AccountId>
 			+ Stp258CurrencyLockable<Self::AccountId>
 			+ Stp258CurrencyReservable<Self::AccountId>;
@@ -69,6 +72,9 @@ pub mod module {
 		#[pallet::constant]
 		type GetStp258NativeId: Get<CurrencyIdOf<Self>>;
 
+		#[pallet::constant]
+		type GetBaseUnit: Get<BaseUnitOf<Self>>;
+		
 		/// Weight information for extrinsics in this module.
 		type WeightInfo: WeightInfo;
 	}
@@ -111,11 +117,13 @@ pub mod module {
 			origin: OriginFor<T>,
 			dest: <T::Lookup as StaticLookup>::Source,
 			currency_id: CurrencyIdOf<T>,
-			#[pallet::compact] amount: BalanceOf<T>,
+			#[pallet::compact] amount: BalanceOf<T>, base_unit: BaseUnitOf<T>,
 		) -> DispatchResultWithPostInfo {
 			let from = ensure_signed(origin)?;
 			let to = T::Lookup::lookup(dest)?;
-			<Self as Stp258Currency<T::AccountId>>::transfer(currency_id, &from, &to, amount)?;
+			let value = amount * base_unit;
+		
+			<Self as Stp258StableCurrency<T::AccountId>>::transfer(currency_id, &from, &to, amount)?;
 			Ok(().into())
 		}
 
@@ -146,6 +154,7 @@ pub mod module {
 			who: <T::Lookup as StaticLookup>::Source,
 			currency_id: CurrencyIdOf<T>,
 			amount: AmountOf<T>,
+			base_unit: BaseUnitOf<T>,
 		) -> DispatchResultWithPostInfo {
 			ensure_root(origin)?;
 			let dest = T::Lookup::lookup(who)?;
@@ -155,15 +164,16 @@ pub mod module {
 	}
 }
 
-impl<T: Config> Stp258Currency<T::AccountId> for Pallet<T> {
+impl<T: Config> Stp258StableCurrency<T::AccountId> for Pallet<T> {
 	type CurrencyId = CurrencyIdOf<T>;
 	type Balance = BalanceOf<T>;
+	type BaseUnit = BaseUnitOf<T>;
 
 	fn minimum_balance(currency_id: Self::CurrencyId) -> Self::Balance {
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::minimum_balance()
 		} else {
-			T::Stp258Currency::minimum_balance(currency_id)
+			T::Stp258StableCurrency::minimum_balance(currency_id)
 		}
 	}
 
@@ -171,7 +181,7 @@ impl<T: Config> Stp258Currency<T::AccountId> for Pallet<T> {
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::total_issuance()
 		} else {
-			T::Stp258Currency::total_issuance(currency_id)
+			T::Stp258StableCurrency::total_issuance(currency_id)
 		}
 	}
 
@@ -179,7 +189,7 @@ impl<T: Config> Stp258Currency<T::AccountId> for Pallet<T> {
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::total_balance(who)
 		} else {
-			T::Stp258Currency::total_balance(currency_id, who)
+			T::Stp258StableCurrency::total_balance(currency_id, who)
 		}
 	}
 
@@ -187,15 +197,17 @@ impl<T: Config> Stp258Currency<T::AccountId> for Pallet<T> {
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::free_balance(who)
 		} else {
-			T::Stp258Currency::free_balance(currency_id, who)
+			T::Stp258StableCurrency::free_balance(currency_id, who)
 		}
 	}
 
-	fn ensure_can_withdraw(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance) -> DispatchResult {
+	fn ensure_can_withdraw(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance, base_unit: Self::BaseUnit) -> DispatchResult {
+		let value = amount * base_unit;
+		
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::ensure_can_withdraw(who, amount)
 		} else {
-			T::Stp258Currency::ensure_can_withdraw(currency_id, who, amount)
+			T::Stp258StableCurrency::ensure_can_withdraw(currency_id, who, value)
 		}
 	}
 
@@ -204,77 +216,94 @@ impl<T: Config> Stp258Currency<T::AccountId> for Pallet<T> {
 		from: &T::AccountId,
 		to: &T::AccountId,
 		amount: Self::Balance,
+		base_unit: Self::BaseUnit,
 	) -> DispatchResult {
+		let value = amount * base_unit;
+		
 		if amount.is_zero() || from == to {
 			return Ok(());
 		}
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::transfer(from, to, amount)?;
+			Self::deposit_event(Event::Transferred(currency_id, from.clone(), to.clone(), amount));
 		} else {
-			T::Stp258Currency::transfer(currency_id, from, to, amount)?;
+			T::Stp258StableCurrency::transfer(currency_id, from, to, value)?;
+			Self::deposit_event(Event::Transferred(currency_id, from.clone(), to.clone(), value));
 		}
-		Self::deposit_event(Event::Transferred(currency_id, from.clone(), to.clone(), amount));
 		Ok(())
 	}
 
-	fn deposit(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance) -> DispatchResult {
+	fn deposit(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance, base_unit: Self::BaseUnit) -> DispatchResult {
+		let value = amount * base_unit;
+		
 		if amount.is_zero() {
 			return Ok(());
 		}
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::deposit(who, amount)?;
+			Self::deposit_event(Event::Deposited(currency_id, who.clone(), amount));
 		} else {
-			T::Stp258Currency::deposit(currency_id, who, amount)?;
+			T::Stp258StableCurrency::deposit(currency_id, who, value)?;
+			Self::deposit_event(Event::Deposited(currency_id, who.clone(), value));
 		}
-		Self::deposit_event(Event::Deposited(currency_id, who.clone(), amount));
 		Ok(())
 	}
 
-	fn withdraw(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance) -> DispatchResult {
+	fn withdraw(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance, base_unit: Self::BaseUnit) -> DispatchResult {
+		let value = amount * base_unit;
+		
 		if amount.is_zero() {
 			return Ok(());
 		}
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::withdraw(who, amount)?;
+			Self::deposit_event(Event::Withdrawn(currency_id, who.clone(), amount));
 		} else {
-			T::Stp258Currency::withdraw(currency_id, who, amount)?;
+			T::Stp258StableCurrency::withdraw(currency_id, who, value)?;
+			Self::deposit_event(Event::Withdrawn(currency_id, who.clone(), value));
 		}
-		Self::deposit_event(Event::Withdrawn(currency_id, who.clone(), amount));
 		Ok(())
 	}
 
-	fn can_slash(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance) -> bool {
+	fn can_slash(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance, base_unit: Self::BaseUnit) -> bool {
+		let value = amount * base_unit;
+		
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::can_slash(who, amount)
 		} else {
-			T::Stp258Currency::can_slash(currency_id, who, amount)
+			T::Stp258StableCurrency::can_slash(currency_id, who, value)
 		}
 	}
 
-	fn slash(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance) -> Self::Balance {
+	fn slash(currency_id: Self::CurrencyId, who: &T::AccountId, amount: Self::Balance, base_unit: Self::BaseUnit) -> Self::Balance {
+		let value = amount * base_unit;
+		
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::slash(who, amount)
 		} else {
-			T::Stp258Currency::slash(currency_id, who, amount)
+			T::Stp258StableCurrency::slash(currency_id, who, value)
 		}
 	}
 }
 
-impl<T: Config> Stp258CurrencyExtended<T::AccountId> for Pallet<T> {
+impl<T: Config> Stp258StableCurrencyExtended<T::AccountId> for Pallet<T> {
 	type Amount = AmountOf<T>;
 
-	fn update_balance(currency_id: Self::CurrencyId, who: &T::AccountId, by_amount: Self::Amount) -> DispatchResult {
+	fn update_balance(currency_id: Self::CurrencyId, who: &T::AccountId, by_amount: Self::Amount, base_unit: Self::BaseUnit) -> DispatchResult {
+		let by_value = by_amount * base_unit;
+		
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::update_balance(who, by_amount)?;
+			Self::deposit_event(Event::BalanceUpdated(currency_id, who.clone(), by_amount));
 		} else {
-			T::Stp258Currency::update_balance(currency_id, who, by_amount)?;
+			T::Stp258StableCurrency::update_balance(currency_id, who, by_value)?;
+			Self::deposit_event(Event::BalanceUpdated(currency_id, who.clone(), by_value));
 		}
-		Self::deposit_event(Event::BalanceUpdated(currency_id, who.clone(), by_amount));
 		Ok(())
 	}
 }
 
-impl<T: Config> Stp258CurrencyLockable<T::AccountId> for Pallet<T> {
+impl<T: Config> Stp258StableCurrencyLockable<T::AccountId> for Pallet<T> {
 	type Moment = T::BlockNumber;
 
 	fn set_lock(
@@ -282,11 +311,14 @@ impl<T: Config> Stp258CurrencyLockable<T::AccountId> for Pallet<T> {
 		currency_id: Self::CurrencyId,
 		who: &T::AccountId,
 		amount: Self::Balance,
+		base_unit: Self::BaseUnit,
 	) -> DispatchResult {
+		let value = amount * base_unit;
+		
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::set_lock(lock_id, who, amount)
 		} else {
-			T::Stp258Currency::set_lock(lock_id, currency_id, who, amount)
+			T::Stp258StableCurrency::set_lock(lock_id, currency_id, who, value)
 		}
 	}
 
@@ -295,11 +327,14 @@ impl<T: Config> Stp258CurrencyLockable<T::AccountId> for Pallet<T> {
 		currency_id: Self::CurrencyId,
 		who: &T::AccountId,
 		amount: Self::Balance,
+		base_unit: Self::BaseUnit,
 	) -> DispatchResult {
+		let value = amount * base_unit;
+		
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::extend_lock(lock_id, who, amount)
 		} else {
-			T::Stp258Currency::extend_lock(lock_id, currency_id, who, amount)
+			T::Stp258StableCurrency::extend_lock(lock_id, currency_id, who, value)
 		}
 	}
 
@@ -307,25 +342,31 @@ impl<T: Config> Stp258CurrencyLockable<T::AccountId> for Pallet<T> {
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::remove_lock(lock_id, who)
 		} else {
-			T::Stp258Currency::remove_lock(lock_id, currency_id, who)
+			T::Stp258StableCurrency::remove_lock(lock_id, currency_id, who)
 		}
 	}
 }
 
-impl<T: Config> Stp258CurrencyReservable<T::AccountId> for Pallet<T> {
-	fn can_reserve(currency_id: Self::CurrencyId, who: &T::AccountId, value: Self::Balance) -> bool {
+
+impl<T: Config> Stp258StableCurrencyReservable<T::AccountId> for Pallet<T> {
+	fn can_reserve(currency_id: Self::CurrencyId, who: &T::AccountId, value: Self::Balance, base_unit: Self::BaseUnit) -> bool {
+		let amount = value * base_unit;
+		
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::can_reserve(who, value)
 		} else {
-			T::Stp258Currency::can_reserve(currency_id, who, value)
+			T::Stp258StableCurrency::can_reserve(currency_id, who, amount)
+			
 		}
 	}
 
-	fn slash_reserved(currency_id: Self::CurrencyId, who: &T::AccountId, value: Self::Balance) -> Self::Balance {
+	fn slash_reserved(currency_id: Self::CurrencyId, who: &T::AccountId, value: Self::Balance, base_unit: Self::BaseUnit) -> Self::Balance {
+		let amount = value * base_unit;
+		
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::slash_reserved(who, value)
 		} else {
-			T::Stp258Currency::slash_reserved(currency_id, who, value)
+			T::Stp258StableCurrency::slash_reserved(currency_id, who, amount)
 		}
 	}
 
@@ -333,23 +374,27 @@ impl<T: Config> Stp258CurrencyReservable<T::AccountId> for Pallet<T> {
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::reserved_balance(who)
 		} else {
-			T::Stp258Currency::reserved_balance(currency_id, who)
+			T::Stp258StableCurrency::reserved_balance(currency_id, who)
 		}
 	}
 
-	fn reserve(currency_id: Self::CurrencyId, who: &T::AccountId, value: Self::Balance) -> DispatchResult {
+	fn reserve(currency_id: Self::CurrencyId, who: &T::AccountId, value: Self::Balance, base_unit: Self::BaseUnit) -> DispatchResult {
+		let amount = value * base_unit;
+
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::reserve(who, value)
 		} else {
-			T::Stp258Currency::reserve(currency_id, who, value)
+			T::Stp258StableCurrency::reserve(currency_id, who, amount)
 		}
 	}
 
-	fn unreserve(currency_id: Self::CurrencyId, who: &T::AccountId, value: Self::Balance) -> Self::Balance {
+	fn unreserve(currency_id: Self::CurrencyId, who: &T::AccountId, value: Self::Balance, base_unit: Self::BaseUnit) -> Self::Balance {
+		let amount = value * base_unit;
+
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::unreserve(who, value)
 		} else {
-			T::Stp258Currency::unreserve(currency_id, who, value)
+			T::Stp258StableCurrency::unreserve(currency_id, who, amount)
 		}
 	}
 
@@ -358,12 +403,15 @@ impl<T: Config> Stp258CurrencyReservable<T::AccountId> for Pallet<T> {
 		slashed: &T::AccountId,
 		beneficiary: &T::AccountId,
 		value: Self::Balance,
+		base_unit: Self::BaseUnit,
 		status: BalanceStatus,
 	) -> result::Result<Self::Balance, DispatchError> {
+		let amount = value * base_unit;
+
 		if currency_id == T::GetStp258NativeId::get() {
 			T::Stp258Native::repatriate_reserved(slashed, beneficiary, value, status)
 		} else {
-			T::Stp258Currency::repatriate_reserved(currency_id, slashed, beneficiary, value, status)
+			T::Stp258StableCurrency::repatriate_reserved(currency_id, slashed, beneficiary, amount, status)
 		}
 	}
 }
@@ -651,13 +699,16 @@ where
 impl<T: Config> MergeAccount<T::AccountId> for Pallet<T> {
 	fn merge_account(source: &T::AccountId, dest: &T::AccountId) -> DispatchResult {
 		with_transaction_result(|| {
-			// transfer non-native free to dest
-			T::Stp258Currency::merge_account(source, dest)?;
+			// transfer stable-currency free to dest
+			T::Stp258StableCurrency::merge_account(source, dest)?;
 
-			// unreserve all reserved currency
+			// unreserve all reserved stable-currency
+			T::Stp258StableCurrency::unreserve(source, T::Stp258StableCurrency::reserved_balance(source));
+
+			// unreserve all reserved native-currency
 			T::Stp258Native::unreserve(source, T::Stp258Native::reserved_balance(source));
 
-			// transfer all free to dest
+			// transfer all free native-currency to dest
 			T::Stp258Native::transfer(source, dest, T::Stp258Native::free_balance(source))
 		})
 	}
