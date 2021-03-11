@@ -46,6 +46,8 @@ pub mod module {
 		fn update_balance_native_currency_killing() -> Weight;
 	}
 
+	pub type BaseUnit = u64;
+
 	pub(crate) type BalanceOf<T> =
 		<<T as Config>::Stp258Currency as Stp258Currency<<T as frame_system::Config>::AccountId>>::Balance;
 	pub(crate) type CurrencyIdOf<T> =
@@ -68,6 +70,10 @@ pub mod module {
 
 		#[pallet::constant]
 		type GetStp258NativeId: Get<CurrencyIdOf<Self>>;
+
+		/// The balance of an account.
+		#[pallet::constant]
+		type GetBaseUnit: Get<BasesUnit>;
 
 		/// Weight information for extrinsics in this module.
 		type WeightInfo: WeightInfo;

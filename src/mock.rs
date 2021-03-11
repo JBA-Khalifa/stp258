@@ -96,7 +96,7 @@ impl Config for Runtime {
 	type Stp258Currency = Stp258Tokens;
 	type Stp258Native = AdaptedStp258Asset;
 	type GetStp258NativeId = GetStp258NativeId;
-	type BaseUnit = u64;
+	type BaseUnit = BaseUnit;
 	type GetBaseUnit = GetBaseUnit;
 	type WeightInfo = ();
 }
